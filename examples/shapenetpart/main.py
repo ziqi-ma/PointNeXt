@@ -1,3 +1,4 @@
+# download data according to https://guochengqian.github.io/PointNeXt/examples/shapenetpart/
 """
 Distributed training script for scene segmentation with S3DIS dataset
 """
@@ -18,6 +19,7 @@ import warnings
 import numpy as np
 from sklearn.metrics import confusion_matrix
 from collections import defaultdict, Counter
+import time
 
 torch.backends.cudnn.benchmark = False
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -36,7 +38,36 @@ from openpoints.utils import set_random_seed, save_checkpoint, load_checkpoint, 
     cal_model_parm_nums, Wandb, generate_exp_directory, resume_exp_directory, EasyConfig, dist_utils, find_free_port
 from openpoints.models.layers import furthest_point_sample
 
+def rotate_pts(pts, angles, device=None): # list of points as a tensor, N*3
 
+    roll = angles[0].reshape(1)
+    yaw = angles[1].reshape(1)
+    pitch = angles[2].reshape(1)
+
+    tensor_0 = torch.zeros(1).to(device)
+    tensor_1 = torch.ones(1).to(device)
+
+    RX = torch.stack([
+                    torch.stack([tensor_1, tensor_0, tensor_0]),
+                    torch.stack([tensor_0, torch.cos(roll), -torch.sin(roll)]),
+                    torch.stack([tensor_0, torch.sin(roll), torch.cos(roll)])]).reshape(3,3)
+
+    RY = torch.stack([
+                    torch.stack([torch.cos(yaw), tensor_0, torch.sin(yaw)]),
+                    torch.stack([tensor_0, tensor_1, tensor_0]),
+                    torch.stack([-torch.sin(yaw), tensor_0, torch.cos(yaw)])]).reshape(3,3)
+
+    RZ = torch.stack([
+                    torch.stack([torch.cos(pitch), -torch.sin(pitch), tensor_0]),
+                    torch.stack([torch.sin(pitch), torch.cos(pitch), tensor_0]),
+                    torch.stack([tensor_0, tensor_0, tensor_1])]).reshape(3,3)
+
+    R = torch.mm(RZ, RY)
+    R = torch.mm(R, RX)
+    if device == "cuda":
+        R = R.cuda()
+    pts_new = torch.mm(pts, R.T)
+    return pts_new
 
 def batched_bincount(x, dim, max_value):
     target = torch.zeros(x.shape[0], max_value, dtype=x.dtype, device=x.device)
@@ -330,8 +361,10 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
     cls_mious = torch.zeros(cfg.shape_classes, dtype=torch.float32).cuda(non_blocking=True)
     cls_nums = torch.zeros(cfg.shape_classes, dtype=torch.int32).cuda(non_blocking=True)
     ins_miou_list = []
+    all_rotation = torch.load(f"/data/ziqi/shapenetpart/random_rotation_test.pt")
 
     # label_size: b, means each sample has one corresponding class
+    cumu_idx = 0
     for idx, data in pbar:
         for key in data.keys():
             data[key] = data[key].cuda(non_blocking=True)
@@ -340,6 +373,11 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
         data['x'] = get_features_by_keys(data, cfg.feature_keys)
         batch_size, num_point, _ = data['pos'].size()
         logits = 0
+        # do random rotation
+        cur_rotations = all_rotation[cumu_idx:cumu_idx+batch_size,:].cuda()
+        for i in range(batch_size):
+            data['pos'][i,:,:] = rotate_pts(data['pos'][i,:,:], cur_rotations[i,:], device='cuda')
+        cumu_idx += batch_size
         for v in range(num_votes+1):
             set_random_seed(v)
             if v > 0:
@@ -368,7 +406,7 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
             # add the iou belongs to this cat
             cls_mious[cur_gt_label] += batch_ins_mious[shape_idx]
             cls_nums[cur_gt_label] += 1
-
+    print(cumu_idx)
     ins_mious_sum, count = torch.sum(torch.stack(ins_miou_list)), torch.tensor(len(ins_miou_list)).cuda()
     if cfg.distributed:
         dist.all_reduce(cls_mious), dist.all_reduce(cls_nums), dist.all_reduce(ins_mious_sum), dist.all_reduce(count)
@@ -389,6 +427,7 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
 
 
 if __name__ == "__main__":
+    stime = time.time()
     parser = argparse.ArgumentParser('ShapeNetPart Part segmentation training')
     parser.add_argument('--cfg', type=str, required=True, help='config file')
     args, opts = parser.parse_known_args()
@@ -445,3 +484,5 @@ if __name__ == "__main__":
         mp.spawn(main, nprocs=cfg.world_size, args=(cfg,))
     else:
         main(0, cfg)
+    etime = time.time()
+    print(etime-stime)
