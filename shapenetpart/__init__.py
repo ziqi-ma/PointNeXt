@@ -1,0 +1,2 @@
+from .shapenetpart import ShapeNetPart, ShapeNetPartNormal
+from .shapenetpartobjaverse import ShapeNetPartObjaverse
