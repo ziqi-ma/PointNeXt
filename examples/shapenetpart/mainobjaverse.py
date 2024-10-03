@@ -120,7 +120,7 @@ def get_ins_mious(pred, target, cls, cls2parts,
             I = torch.logical_and(pred_part, target_part).sum()
             U = torch.logical_or(pred_part, target_part).sum()
             if U == 0:
-                iou = torch.tensor(100, device=pred.device, dtype=torch.float32)
+                pass#iou = torch.tensor(100, device=pred.device, dtype=torch.float32)
             else:
                 iou = I * 100 / float(U)
                 part_ious.append(iou)
@@ -289,10 +289,10 @@ def main(gpu, cfg):
     # if writer is not None:
     #     Wandb.add_file(os.path.join(cfg.ckpt_dir, f'{cfg.run_name}_ckpt_best.pth'))
     # Wandb.add_file(os.path.join(cfg.ckpt_dir, f'{cfg.logname}_ckpt_latest.pth'))
-    with np.printoptions(precision=2, suppress=True):
+    with np.printoptions(precision=3, suppress=True):
         logging.info(f'Best Epoch {best_epoch},'
-                     f'Instance mIoU {best_ins_miou:.2f}, '
-                     f'Class mIoU {cls_miou_when_best:.2f}, '
+                     f'Instance mIoU {best_ins_miou:.3f}, '
+                     f'Class mIoU {cls_miou_when_best:.3f}, '
                      f'\n Class mIoUs {cls_mious_when_best}')
 
     if cfg.get('num_votes', 0) > 0:
@@ -301,10 +301,10 @@ def main(gpu, cfg):
         set_random_seed(cfg.seed)
         test_ins_miou, test_cls_miou, test_cls_mious  = validate_fn(model, val_loader, cfg, num_votes=cfg.get('num_votes', 0),
                                  data_transform=voting_transform)
-        with np.printoptions(precision=2, suppress=True):
+        with np.printoptions(precision=3, suppress=True):
             logging.info(f'---Voting---\nBest Epoch {best_epoch},'
-                        f'Voting Instance mIoU {test_ins_miou:.2f}, '
-                        f'Voting Class mIoU {test_cls_miou:.2f}, '
+                        f'Voting Instance mIoU {test_ins_miou:.3f}, '
+                        f'Voting Class mIoU {test_cls_miou:.3f}, '
                         f'\n Voting Class mIoUs {test_cls_mious}')
 
         if writer is not None:
@@ -384,15 +384,26 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
         preds = logits.max(dim=1)[1]
         if cfg.get('refine', False):
             part_seg_refinement(preds, data['pos'], data['cls'], cfg.cls2parts, cfg.get('refine_n', 10))
-
+        
+        # upsample
+        xyz_sub = data['xyz_sub'] # BS,2048,3
+        xyz_full = data['xyz_full'] # BS,5000,3
+        target_full = data['y_full'] # BS,5000
+        dist_all = (xyz_sub.unsqueeze(1) - xyz_full.cuda().unsqueeze(2))**2 # BS,5000,2048,3
+        cur_dist = (dist_all.sum(dim=-1))**0.5 # BS,5000,2048
+        min_idxs = torch.min(cur_dist, 2)[1] #take index BS,5000
+        full_preds = torch.zeros(target_full.shape).cuda()
+        for i in range(full_preds.shape[0]):
+            full_preds[i,:] = preds[i,min_idxs[i,:]]
+        
         if cfg.criterion_args.NAME != 'MultiShapeCrossEntropy':
-            batch_ins_mious = get_ins_mious(preds, target, data['cls'], cfg.cls2parts)
+            batch_ins_mious = get_ins_mious(full_preds, target_full, data['cls'], cfg.cls2parts)
             ins_miou_list += batch_ins_mious
         else:
             iou_array = []
             for ib in range(batch_size):
                 sl = data['cls'][ib][0]
-                iou = get_ins_mious(preds[ib:ib + 1], target[ib:ib + 1], sl.unsqueeze(0), cfg.cls2parts,
+                iou = get_ins_mious(full_preds[ib:ib + 1], target_full[ib:ib + 1], sl.unsqueeze(0), cfg.cls2parts,
                                     multihead=True)
                 iou_array.append(iou)
             ins_miou_list += iou_array
@@ -415,10 +426,10 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
 
     ins_miou = ins_mious_sum/count
     cls_miou = torch.mean(cls_mious)
-    with np.printoptions(precision=2, suppress=True):
+    with np.printoptions(precision=3, suppress=True):
         logging.info(f'Test Epoch [{cfg.epoch}/{cfg.epochs}],'
-                        f'Instance mIoU {ins_miou:.2f}, '
-                        f'Class mIoU {cls_miou:.2f}, '
+                        f'Instance mIoU {ins_miou:.3f}, '
+                        f'Class mIoU {cls_miou:.3f}, '
                         f'\n Class mIoUs {cls_mious}')
     return ins_miou, cls_miou, cls_mious
 
@@ -431,6 +442,8 @@ if __name__ == "__main__":
     cfg = EasyConfig()
     cfg.load(args.cfg, recursive=True)
     cfg.update(opts)
+    cfg.seed=123
+    torch.manual_seed(cfg.seed)
     if cfg.seed is None:
         cfg.seed = np.random.randint(1, 10000)
     # init distributed env first, since logger depends on the dist info.

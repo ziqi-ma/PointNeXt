@@ -1,6 +1,6 @@
 dataset:
   common:
-    NAME: ShapeNetPartObjaverse
+    NAME: ShapeNetPartNormal #ShapeNetPartObjaverse ShapeNetPartEstimateNormal # 
     data_root: /data/ziqi/shapenetpartnormal/shapenetcore_partanno_segmentation_benchmark_v0_normal
     use_normal: True
     num_points: 2048
@@ -29,7 +29,7 @@ datatransforms:
 
 batch_size: 8
 dataloader:
-  num_workers: 6
+  num_workers: 0
 
 # ---------------------------------------------------------------------------- #
 # Evaluation cfgs

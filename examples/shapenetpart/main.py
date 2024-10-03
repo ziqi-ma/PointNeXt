@@ -120,10 +120,10 @@ def get_ins_mious(pred, target, cls, cls2parts,
             I = torch.logical_and(pred_part, target_part).sum()
             U = torch.logical_or(pred_part, target_part).sum()
             if U == 0:
-                iou = torch.tensor(100, device=pred.device, dtype=torch.float32)
+                pass #iou = torch.tensor(100, device=pred.device, dtype=torch.float32)
             else:
                 iou = I * 100 / float(U)
-            part_ious.append(iou)
+                part_ious.append(iou)
         ins_mious.append(torch.mean(torch.stack(part_ious)))
     return ins_mious
 
@@ -287,10 +287,10 @@ def main(gpu, cfg):
     # if writer is not None:
     #     Wandb.add_file(os.path.join(cfg.ckpt_dir, f'{cfg.run_name}_ckpt_best.pth'))
     # Wandb.add_file(os.path.join(cfg.ckpt_dir, f'{cfg.logname}_ckpt_latest.pth'))
-    with np.printoptions(precision=2, suppress=True):
+    with np.printoptions(precision=3, suppress=True):
         logging.info(f'Best Epoch {best_epoch},'
-                     f'Instance mIoU {best_ins_miou:.2f}, '
-                     f'Class mIoU {cls_miou_when_best:.2f}, '
+                     f'Instance mIoU {best_ins_miou:.3f}, '
+                     f'Class mIoU {cls_miou_when_best:.3f}, '
                      f'\n Class mIoUs {cls_mious_when_best}')
 
     if cfg.get('num_votes', 0) > 0:
@@ -299,10 +299,10 @@ def main(gpu, cfg):
         set_random_seed(cfg.seed)
         test_ins_miou, test_cls_miou, test_cls_mious  = validate_fn(model, val_loader, cfg, num_votes=cfg.get('num_votes', 0),
                                  data_transform=voting_transform)
-        with np.printoptions(precision=2, suppress=True):
+        with np.printoptions(precision=3, suppress=True):
             logging.info(f'---Voting---\nBest Epoch {best_epoch},'
-                        f'Voting Instance mIoU {test_ins_miou:.2f}, '
-                        f'Voting Class mIoU {test_cls_miou:.2f}, '
+                        f'Voting Instance mIoU {test_ins_miou:.3f}, '
+                        f'Voting Class mIoU {test_cls_miou:.3f}, '
                         f'\n Voting Class mIoUs {test_cls_mious}')
 
         if writer is not None:
@@ -361,7 +361,6 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
     cls_mious = torch.zeros(cfg.shape_classes, dtype=torch.float32).cuda(non_blocking=True)
     cls_nums = torch.zeros(cfg.shape_classes, dtype=torch.int32).cuda(non_blocking=True)
     ins_miou_list = []
-    all_rotation = torch.load(f"/data/ziqi/shapenetpart/random_rotation_test.pt")
 
     # label_size: b, means each sample has one corresponding class
     cumu_idx = 0
@@ -374,9 +373,10 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
         batch_size, num_point, _ = data['pos'].size()
         logits = 0
         # do random rotation
-        cur_rotations = all_rotation[cumu_idx:cumu_idx+batch_size,:].cuda()
-        for i in range(batch_size):
-            data['pos'][i,:,:] = rotate_pts(data['pos'][i,:,:], cur_rotations[i,:], device='cuda')
+        #cur_rotations = all_rotation[cumu_idx:cumu_idx+batch_size,:].cuda()
+        #if apply_rotation:
+            #for i in range(batch_size):
+                #data['pos'][i,:,:] = rotate_pts(data['pos'][i,:,:], cur_rotations[i,:], device='cuda')
         cumu_idx += batch_size
         for v in range(num_votes+1):
             set_random_seed(v)
@@ -406,7 +406,7 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
             # add the iou belongs to this cat
             cls_mious[cur_gt_label] += batch_ins_mious[shape_idx]
             cls_nums[cur_gt_label] += 1
-    print(cumu_idx)
+
     ins_mious_sum, count = torch.sum(torch.stack(ins_miou_list)), torch.tensor(len(ins_miou_list)).cuda()
     if cfg.distributed:
         dist.all_reduce(cls_mious), dist.all_reduce(cls_nums), dist.all_reduce(ins_mious_sum), dist.all_reduce(count)
@@ -418,10 +418,10 @@ def validate(model, val_loader, cfg, num_votes=0, data_transform=None):
 
     ins_miou = ins_mious_sum/count
     cls_miou = torch.mean(cls_mious)
-    with np.printoptions(precision=2, suppress=True):
+    with np.printoptions(precision=3, suppress=True):
         logging.info(f'Test Epoch [{cfg.epoch}/{cfg.epochs}],'
-                        f'Instance mIoU {ins_miou:.2f}, '
-                        f'Class mIoU {cls_miou:.2f}, '
+                        f'Instance mIoU {ins_miou:.3f}, '
+                        f'Class mIoU {cls_miou:.3f}, '
                         f'\n Class mIoUs {cls_mious}')
     return ins_miou, cls_miou, cls_mious
 
@@ -434,6 +434,8 @@ if __name__ == "__main__":
     cfg = EasyConfig()
     cfg.load(args.cfg, recursive=True)
     cfg.update(opts)
+    cfg.seed = 123
+    torch.manual_seed(123)
     if cfg.seed is None:
         cfg.seed = np.random.randint(1, 10000)
     # init distributed env first, since logger depends on the dist info.
